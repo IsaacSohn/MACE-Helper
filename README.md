@@ -87,6 +87,32 @@ python -u mace_train.py
     --restart_latest 
     --save_cpu
 ```
+For a quick demo, run this instead
+```bash
+python -u mace_train.py 
+--train_file data/train.xyz 
+--valid_file data/valid.xyz 
+--work_dir runs 
+--name quick_demo 
+--seed 1 
+--device cpu 
+--extra 
+  --E0s average 
+  --energy_key TotEnergy 
+  --forces_key force 
+  --num_interactions 1 
+  --num_channels 32 
+  --max_L 0 
+  --correlation 2 
+  --r_max 5.0 
+  --batch_size 8 
+  --valid_batch_size 8 
+  --max_num_epochs 15 
+  --forces_weight 100 
+  --energy_weight 1 
+  --default_dtype float32 
+  --save_cpu
+```
 I know it looks like a lot, but a lot of these specifications are just very picky alterations to make sure everything stays consistent.
 
 This will create a directory like this:
@@ -104,6 +130,7 @@ We want to see if the mace model we trained can actually infer data, and we just
 - you have a good base model
 - you want to adapt to a new regime
 - you want stability and faster convergence
+#### NOTE: Freeze is for refinement, not initial learning. It is an optimization strategy, not a requirement.
 
 ### Create a freeze-init checkpoint
 ```bash
@@ -118,6 +145,11 @@ This writes:
 - `freeze_init.pt` (checkpoint with metadata describing freeze plan)
 - `freeze_plan.json` (human-readable)
 (If your version supports an init/restart arg, add it via --extra in `mace_train.py`.)
+
+We can THEN train like this
+```bash
+python mace_train.py ... --extra --E0s average --energy_key TotEnergy --forces_key force --model runs\water_1k_small\freeze_init.pt
+```
 
 ## Step 4. “Model merge” aka: Train a committee (aka: multiple models but I want to sound smart)
 ### DISCLAIMER: WE ARE NOT MERGING WEIGHTS.
