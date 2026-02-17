@@ -1,5 +1,0 @@
-mace-torch 
-nglview 
-ipywidgets 
-rdkit 
-x3dase
