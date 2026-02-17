@@ -24,7 +24,7 @@ This repo provides a reproducible workflow to:
   Reproducible training wrapper. Writes `manifest.json` and calls `mace_run_train` internally.
 
 - `inference_test.py`  
-  Tests if the outputted mace model can make inferences
+  Tests if the outputted mace model can make inferences.
 
 - `mace_freeze.py`  
   Creates a “freeze-init” checkpoint and freeze plan metadata (used when fine-tuning).
@@ -97,5 +97,100 @@ runs/water_1k_small/
   logs...
 ```
 ## Step 2.5: Run a quick test to see if it worked
+We want to see if the mace model we trained can actually infer data, and we just have to run `inference_test.py` for that.
 
-Step 4: (Optional) Freeze parts of a model (fine-tune)
+## Step 3: (Optional) Freeze parts of a model (fine-tune)
+### Freezing is useful when:
+- you have a good base model
+- you want to adapt to a new regime
+- you want stability and faster convergence
+
+### Create a freeze-init checkpoint
+```bash
+python mace_freeze.py
+  --in_ckpt runs\water_1k_small\checkpoints\best.pt
+  --out_ckpt runs\water_1k_small\freeze_init.pt
+  --freeze embedding radial
+  --unfreeze readout
+  --out_plan runs\water_1k_small\freeze_plan.json
+```
+This writes:
+- `freeze_init.pt` (checkpoint with metadata describing freeze plan)
+- `freeze_plan.json` (human-readable)
+(If your version supports an init/restart arg, add it via --extra in `mace_train.py`.)
+
+## Step 4. “Model merge” aka: Train a committee (aka: multiple models but I want to sound smart)
+### DISCLAIMER: WE ARE NOT MERGING WEIGHTS.
+That is like averaging scientific outputs and expecting it to be accurate
+Instead, we...
+
+### Train multiple models with different seeds
+```bash
+python -u mace_train.py --train_file data/train.xyz --valid_file data/valid.xyz --work_dir runs\iter_00 --name c0 --seed 0 --device cpu --extra --E0s average --energy_key TotEnergy --forces_key force --max_num_epochs 200 --save_cpu
+python -u mace_train.py --train_file data/train.xyz --valid_file data/valid.xyz --work_dir runs\iter_00 --name c1 --seed 1 --device cpu --extra --E0s average --energy_key TotEnergy --forces_key force --max_num_epochs 200 --save_cpu
+python -u mace_train.py --train_file data/train.xyz --valid_file data/valid.xyz --work_dir runs\iter_00 --name c2 --seed 2 --device cpu --extra --E0s average --energy_key TotEnergy --forces_key force --max_num_epochs 200 --save_cpu
+python -u mace_train.py --train_file data/train.xyz --valid_file data/valid.xyz --work_dir runs\iter_00 --name c3 --seed 3 --device cpu --extra --E0s average --energy_key TotEnergy --forces_key force --max_num_epochs 200 --save_cpu
+```
+### Compute committee disagreement (“model merge scoring”)
+Prepare a pool file containing candidate unlabeled structures
+```bash
+data/pool.xyz
+```
+Run the disagreements
+```bash
+python model_disagreement.py
+  --models 
+      runs\iter_00\c0\checkpoints\best.pt  
+      runs\iter_00\c1\checkpoints\best.pt
+      runs\iter_00\c2\checkpoints\best.pt 
+      runs\iter_00\c3\checkpoints\best.pt 
+  --xyz data\pool.xyz 
+  --out_json runs\iter_00\pool_disagreement.json 
+  --device cpu 
+  --score force_rms_std
+```
+Outputs a json that contains per-structure scores (higher = more disagreement = more uncertainty)
+```
+runs/iter_00/pool_disagreement.json
+```
+
+## Step 5. Active Learning selection (pick top-K uncertain structures)
+```bash
+python mace_active_learning.py ^
+  --models runs\iter_00\c0\checkpoints\best.pt runs\iter_00\c1\checkpoints\best.pt runs\iter_00\c2\checkpoints\best.pt runs\iter_00\c3\checkpoints\best.pt ^
+  --pool_xyz data\pool.xyz ^
+  --out_selected runs\iter_00\to_label.xyz ^
+  --k 50 ^
+  --device cpu ^
+  --score force_rms_std
+```
+This writes:
+```bash
+runs/iter_00/to_label.xyz (structures to label next)
+```
+
+## Step 6. Label the selected structures (external step)
+
+Run your reference method (DFT / ab initio / etc.) to compute:
+- energies
+- forces
+
+Write them back into extxyz.
+
+Example output:
+```bash
+runs/iter_00/labeled_new.xyz
+```
+
+## Step 7. Append newly labeled data and repeat
+
+Append to your growing training set:
+
+```bash
+type data\train.xyz runs\iter_00\labeled_new.xyz > data\train_next.xyz
+move /Y data\train_next.xyz data\train.xyz
+```
+
+## Step 8. Repeat!
+
+train (or fine-tune) → committee → disagreement → select → label → append
