@@ -226,3 +226,8 @@ move /Y data\train_next.xyz data\train.xyz
 ## Step 8. Repeat!
 
 train (or fine-tune) → committee → disagreement → select → label → append
+
+# To-Dos
+1. Add delta-force/energy implementation
+2. Update README to be more clearer with definitions
+3. Incorporate with supercomputers to be able to train multiple models for merging
